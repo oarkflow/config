@@ -7,14 +7,14 @@ import (
 	"math"
 	"os"
 	"path/filepath"
-	"reflect"
 	"strconv"
 	"strings"
 	"time"
 
-	"github.com/goccy/go-json"
+	"github.com/bytedance/sonic/decoder"
+	"github.com/goccy/go-reflect"
 	"github.com/goccy/go-yaml"
-	"github.com/joho/godotenv"
+	"github.com/sujit-baniya/config/dotenv"
 )
 
 const (
@@ -24,19 +24,19 @@ const (
 
 // Supported tags
 const (
-	// Name of the environment variable or a list of names
+	// TagEnv Name of the environment variable or a list of names
 	TagEnv = "env"
-	// Value parsing layout (for types like time.Time)
+	// TagEnvLayout Value parsing layout (for types like time.Time)
 	TagEnvLayout = "env-layout"
-	// Default value
+	// TagEnvDefault Default value
 	TagEnvDefault = "env-default"
-	// Custom list and map separator
+	// TagEnvSeparator Custom list and map separator
 	TagEnvSeparator = "env-separator"
-	// Environment variable description
+	// TagEnvDescription Environment variable description
 	TagEnvDescription = "env-description"
-	// Flag to mark a field as updatable
+	// TagEnvUpd Flag to mark a field as updatable
 	TagEnvUpd = "env-upd"
-	// Flag to mark a field as required
+	// TagEnvRequired Flag to mark a field as required
 	TagEnvRequired = "env-required"
 )
 
@@ -44,15 +44,15 @@ const (
 //
 // To implement a custom value setter you need to add a SetValue function to your type that will receive a string raw value:
 //
-// 	type MyField string
+//	type MyField string
 //
-// 	func (f *MyField) SetValue(s string) error {
-// 		if s == "" {
-// 			return fmt.Errorf("field value can't be empty")
-// 		}
-// 		*f = MyField("my field is: " + s)
-// 		return nil
-// 	}
+//	func (f *MyField) SetValue(s string) error {
+//		if s == "" {
+//			return fmt.Errorf("field value can't be empty")
+//		}
+//		*f = MyField("my field is: " + s)
+//		return nil
+//	}
 type Setter interface {
 	SetValue(string) error
 }
@@ -67,21 +67,22 @@ type Updater interface {
 //
 // Example:
 //
-//	 type ConfigDatabase struct {
-//	 	Port     string `yaml:"port" env:"PORT" env-default:"5432"`
-//	 	Host     string `yaml:"host" env:"HOST" env-default:"localhost"`
-//	 	Name     string `yaml:"name" env:"NAME" env-default:"postgres"`
-//	 	User     string `yaml:"user" env:"USER" env-default:"user"`
-//	 	Password string `yaml:"password" env:"PASSWORD"`
-//	 }
+//	type ConfigDatabase struct {
+//		Port     string `yaml:"port" env:"PORT" env-default:"5432"`
+//		Host     string `yaml:"host" env:"HOST" env-default:"localhost"`
+//		Name     string `yaml:"name" env:"NAME" env-default:"postgres"`
+//		User     string `yaml:"user" env:"USER" env-default:"user"`
+//		Password string `yaml:"password" env:"PASSWORD"`
+//	}
 //
-//	 var cfg ConfigDatabase
+//	var cfg ConfigDatabase
 //
-//	 err := cleanenv.ReadConfig("config.yml", &cfg)
-//	 if err != nil {
-//	     ...
-//	 }
-func ReadConfig(path string, cfg interface{}) error {
+//	err := cleanenv.ReadConfig("config.yml", &cfg)
+//	if err != nil {
+//	    ...
+//	}
+func ReadConfig(path string, cfg any) error {
+	dotenv.Load()
 	err := parseFile(path, cfg)
 	if err != nil {
 		return err
@@ -90,7 +91,7 @@ func ReadConfig(path string, cfg interface{}) error {
 	return readEnvVars(cfg, false)
 }
 
-func ReadYmlBytes(data []byte, cfg interface{}) error {
+func ReadYmlBytes(data []byte, cfg any) error {
 	err := parseYAMLByte(data, cfg)
 	if err != nil {
 		return err
@@ -100,16 +101,16 @@ func ReadYmlBytes(data []byte, cfg interface{}) error {
 }
 
 // ReadEnv reads environment variables into the structure.
-func ReadEnv(cfg interface{}) error {
+func ReadEnv(cfg any) error {
 	return readEnvVars(cfg, false)
 }
 
 // UpdateEnv rereads (updates) environment variables in the structure.
-func UpdateEnv(cfg interface{}) error {
+func UpdateEnv(cfg any) error {
 	return readEnvVars(cfg, true)
 }
 
-// parseFile parses configuration file according to it's extension
+// parseFile parses configuration file according to its extension
 //
 // Currently following file extensions are supported:
 //
@@ -122,7 +123,7 @@ func UpdateEnv(cfg interface{}) error {
 // - env
 //
 // - edn
-func parseFile(path string, cfg interface{}) error {
+func parseFile(path string, cfg any) error {
 	// open the configuration file
 	f, err := os.OpenFile(path, os.O_RDONLY|os.O_SYNC, 0)
 	if err != nil {
@@ -148,24 +149,24 @@ func parseFile(path string, cfg interface{}) error {
 }
 
 // parseYAML parses YAML from reader to data structure
-func parseYAML(r io.Reader, str interface{}) error {
+func parseYAML(r io.Reader, str any) error {
 	return yaml.NewDecoder(r).Decode(str)
 }
 
-func parseYAMLByte(r []byte, str interface{}) error {
+func parseYAMLByte(r []byte, str any) error {
 	return yaml.Unmarshal(r, str)
 }
 
 // parseJSON parses JSON from reader to data structure
-func parseJSON(r io.Reader, str interface{}) error {
-	return json.NewDecoder(r).Decode(str)
+func parseJSON(r io.Reader, str any) error {
+	return decoder.NewStreamDecoder(r).Decode(str)
 }
 
 // parseENV, in fact, doesn't fill the structure with environment variable values.
 // It just parses ENV file and sets all variables to the environment.
 // Thus, the structure should be filled at the next steps.
-func parseENV(r io.Reader, _ interface{}) error {
-	vars, err := godotenv.Parse(r)
+func parseENV(r io.Reader, _ any) error {
+	vars, err := dotenv.Parse(r)
 	if err != nil {
 		return err
 	}
@@ -195,8 +196,8 @@ func (sm *structMeta) isFieldValueZero() bool {
 }
 
 // readStructMetadata reads structure metadata (types, tags, etc.)
-func readStructMetadata(cfgRoot interface{}) ([]structMeta, error) {
-	cfgStack := []interface{}{cfgRoot}
+func readStructMetadata(cfgRoot any) ([]structMeta, error) {
+	cfgStack := []any{cfgRoot}
 	metas := make([]structMeta, 0)
 
 	for i := 0; i < len(cfgStack); i++ {
@@ -281,7 +282,7 @@ func readStructMetadata(cfgRoot interface{}) ([]structMeta, error) {
 }
 
 // readEnvVars reads environment variables to the provided configuration structure
-func readEnvVars(cfg interface{}, update bool) error {
+func readEnvVars(cfg any, update bool) error {
 	metaInfo, err := readStructMetadata(cfg)
 	if err != nil {
 		return err
@@ -481,7 +482,7 @@ func parseMap(valueType reflect.Type, value string, sep string, layout *string) 
 
 // GetDescription returns a description of environment variables.
 // You can provide a custom header text.
-func GetDescription(cfg interface{}, headerText *string) (string, error) {
+func GetDescription(cfg any, headerText *string) (string, error) {
 	meta, err := readStructMetadata(cfg)
 	if err != nil {
 		return "", err
@@ -523,13 +524,13 @@ func GetDescription(cfg interface{}, headerText *string) (string, error) {
 // Usage returns a configuration usage help.
 // Other usage instructions can be wrapped in and executed before this usage function.
 // The default output is STDERR.
-func Usage(cfg interface{}, headerText *string, usageFuncs ...func()) func() {
+func Usage(cfg any, headerText *string, usageFuncs ...func()) func() {
 	return FUsage(os.Stderr, cfg, headerText, usageFuncs...)
 }
 
 // FUsage prints configuration help into the custom output.
 // Other usage instructions can be wrapped in and executed before this usage function
-func FUsage(w io.Writer, cfg interface{}, headerText *string, usageFuncs ...func()) func() {
+func FUsage(w io.Writer, cfg any, headerText *string, usageFuncs ...func()) func() {
 	return func() {
 		for _, fn := range usageFuncs {
 			fn()
