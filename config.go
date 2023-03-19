@@ -1,8 +1,10 @@
 package config
 
 import (
+	"encoding/json"
 	"flag"
 	"fmt"
+	"github.com/sujit-baniya/config/dipper"
 	"io"
 	"math"
 	"os"
@@ -39,6 +41,58 @@ const (
 	// TagEnvRequired Flag to mark a field as required
 	TagEnvRequired = "env-required"
 )
+
+type Config struct {
+	data map[string]any
+	file string
+}
+
+func (c *Config) Get(key string) any {
+	return dipper.Get(c.data, key)
+}
+
+func (c *Config) Set(key string, value any) error {
+	return dipper.Set(c.data, key, value)
+}
+
+func (c *Config) All() map[string]any {
+	return c.data
+}
+
+func (c *Config) Read() error {
+	var str map[string]any
+	err := ReadConfig(c.file, &str)
+	if err != nil {
+		return err
+	}
+	c.data = str
+	return err
+}
+
+func (c *Config) Unmarshal(dst any) error {
+	if c.data == nil {
+		err := c.Read()
+		if err != nil {
+			return err
+		}
+	}
+	bt, err := json.Marshal(c.data)
+	if err != nil {
+		return err
+	}
+	err = json.Unmarshal(bt, dst)
+	if err != nil {
+		return err
+	}
+	return readEnvVars(dst, false)
+}
+
+func New(file string) *Config {
+	return &Config{
+		data: make(map[string]any),
+		file: file,
+	}
+}
 
 // Setter is an interface for a custom value setter.
 //
@@ -87,7 +141,13 @@ func ReadConfig(path string, cfg any) error {
 	if err != nil {
 		return err
 	}
-
+	s := reflect.ValueOf(cfg)
+	if s.Kind() == reflect.Ptr {
+		s = s.Elem()
+	}
+	if s.Kind() == reflect.Map {
+		return nil
+	}
 	return readEnvVars(cfg, false)
 }
 
