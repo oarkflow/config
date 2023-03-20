@@ -5,6 +5,7 @@ import (
 	"flag"
 	"fmt"
 	"github.com/sujit-baniya/config/dipper"
+	"github.com/sujit-baniya/config/flat"
 	"io"
 	"math"
 	"os"
@@ -146,6 +147,17 @@ func ReadConfig(path string, cfg any) error {
 		s = s.Elem()
 	}
 	if s.Kind() == reflect.Map {
+		mp, err := flat.Flatten(*cfg.(*map[string]any), nil)
+		if err != nil {
+			return err
+		}
+
+		for k, _ := range mp {
+			envVar := strings.ToUpper(strings.ReplaceAll(k, ".", "_"))
+			if val, ok := os.LookupEnv(envVar); ok {
+				dipper.Set(cfg, k, val)
+			}
+		}
 		return nil
 	}
 	return readEnvVars(cfg, false)
