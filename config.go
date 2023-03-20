@@ -62,7 +62,7 @@ func (c *Config) All() map[string]any {
 
 func (c *Config) Read() error {
 	var str map[string]any
-	err := ReadConfig(c.file, &str)
+	err := Read(c.file, &str)
 	if err != nil {
 		return err
 	}
@@ -117,7 +117,7 @@ type Updater interface {
 	Update() error
 }
 
-// ReadConfig reads configuration file and parses it depending on tags in structure provided.
+// Read reads configuration file and parses it depending on tags in structure provided.
 // Then it reads and parses
 //
 // Example:
@@ -132,11 +132,11 @@ type Updater interface {
 //
 //	var cfg ConfigDatabase
 //
-//	err := cleanenv.ReadConfig("config.yml", &cfg)
+//	err := config.Read("config.yml", &cfg)
 //	if err != nil {
 //	    ...
 //	}
-func ReadConfig(path string, cfg any) error {
+func Read(path string, cfg any) error {
 	dotenv.Load()
 	err := parseFile(path, cfg)
 	if err != nil {
