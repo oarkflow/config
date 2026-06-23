@@ -1,0 +1,4 @@
+{
+  "app": {"name":"Workflow JSON","debug":true},
+  "server": {"addr":":8080","port":8080}
+}

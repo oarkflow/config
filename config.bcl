@@ -1,0 +1,19 @@
+app {
+  name "Workflow Enterprise"
+  debug false
+  host "0.0.0.0"
+  port 3003
+  reload true
+  shutdown_timeout "30s"
+}
+
+database {
+  driver "postgres"
+  host "${DB_HOST}"
+  port 5432
+  user "postgres"
+  password "${DB_PASSWORD}"
+  name "workflow"
+  sslmode "require"
+  max_open 25
+}
