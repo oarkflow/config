@@ -24,9 +24,12 @@ const (
 	KindFloat64     ValueKind = "float64"
 	KindDuration    ValueKind = "duration"
 	KindSize        ValueKind = "size"
-	KindStringSlice ValueKind = "[]string"
-	KindSecret      ValueKind = "secret"
-	KindMap         ValueKind = "map"
+	KindStringSlice  ValueKind = "[]string"
+	KindIntSlice     ValueKind = "[]int"
+	KindInt64Slice   ValueKind = "[]int64"
+	KindFloat64Slice ValueKind = "[]float64"
+	KindSecret       ValueKind = "secret"
+	KindMap          ValueKind = "map"
 )
 
 type SecretString struct{ value string }
@@ -284,6 +287,102 @@ func ToStringSlice(v any) ([]string, bool) {
 			if p != "" {
 				out = append(out, p)
 			}
+		}
+		return out, true
+	default:
+		return nil, false
+	}
+}
+func ToIntSlice(v any) ([]int, bool) {
+	switch x := v.(type) {
+	case []int:
+		out := make([]int, len(x))
+		copy(out, x)
+		return out, true
+	case []any:
+		out := make([]int, 0, len(x))
+		for _, v := range x {
+			i, ok := ToInt(v)
+			if !ok {
+				return nil, false
+			}
+			out = append(out, i)
+		}
+		return out, true
+	case []int64:
+		out := make([]int, 0, len(x))
+		for _, v := range x {
+			out = append(out, int(v))
+		}
+		return out, true
+	case []float64:
+		out := make([]int, 0, len(x))
+		for _, v := range x {
+			out = append(out, int(v))
+		}
+		return out, true
+	default:
+		return nil, false
+	}
+}
+func ToInt64Slice(v any) ([]int64, bool) {
+	switch x := v.(type) {
+	case []int64:
+		out := make([]int64, len(x))
+		copy(out, x)
+		return out, true
+	case []any:
+		out := make([]int64, 0, len(x))
+		for _, v := range x {
+			i, ok := ToInt64(v)
+			if !ok {
+				return nil, false
+			}
+			out = append(out, i)
+		}
+		return out, true
+	case []int:
+		out := make([]int64, 0, len(x))
+		for _, v := range x {
+			out = append(out, int64(v))
+		}
+		return out, true
+	case []float64:
+		out := make([]int64, 0, len(x))
+		for _, v := range x {
+			out = append(out, int64(v))
+		}
+		return out, true
+	default:
+		return nil, false
+	}
+}
+func ToFloat64Slice(v any) ([]float64, bool) {
+	switch x := v.(type) {
+	case []float64:
+		out := make([]float64, len(x))
+		copy(out, x)
+		return out, true
+	case []any:
+		out := make([]float64, 0, len(x))
+		for _, v := range x {
+			f, ok := ToFloat64(v)
+			if !ok {
+				return nil, false
+			}
+			out = append(out, f)
+		}
+		return out, true
+	case []int:
+		out := make([]float64, 0, len(x))
+		for _, v := range x {
+			out = append(out, float64(v))
+		}
+		return out, true
+	case []int64:
+		out := make([]float64, 0, len(x))
+		for _, v := range x {
+			out = append(out, float64(v))
 		}
 		return out, true
 	default:

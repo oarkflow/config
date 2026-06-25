@@ -94,3 +94,18 @@ func WithAdvancedReloadHandler(h AdvancedReloadHandler) Option {
 func WithCompliance(policies ...CompliancePolicy) Option {
 	return func(m *Manager) { m.ApplyCompliance(policies...) }
 }
+func WithEncryptor(enc Encryptor) Option {
+	return func(m *Manager) { m.SetEncryptor(enc) }
+}
+func WithEncryptedPaths(paths ...string) Option {
+	return func(m *Manager) { m.MarkEncrypted(paths...) }
+}
+func WithSchema(schema any) Option {
+	return func(m *Manager) {
+		sv, err := NewSchemaValidator(schema)
+		if err != nil {
+			panic(err)
+		}
+		m.validators = append(m.validators, sv)
+	}
+}

@@ -142,8 +142,23 @@ func (s *Section) Size(key, env string, def Size) *Entry {
 func (s *Section) StringSlice(key, env string, def []string) *Entry {
 	return s.put(key, env, KindStringSlice, def, s.m.EnvStringSlice(env, def), false)
 }
+func (s *Section) IntSlice(key, env string, def []int) *Entry {
+	return s.put(key, env, KindIntSlice, def, def, false)
+}
+func (s *Section) Int64Slice(key, env string, def []int64) *Entry {
+	return s.put(key, env, KindInt64Slice, def, def, false)
+}
+func (s *Section) Float64Slice(key, env string, def []float64) *Entry {
+	return s.put(key, env, KindFloat64Slice, def, def, false)
+}
 func (s *Section) SecretString(key, env, def string) *Entry {
 	return s.put(key, env, KindSecret, "[REDACTED]", s.m.EnvSecret(env, def), true)
+}
+func (s *Section) EncryptedString(key, env, def string) *Entry {
+	val := s.m.EnvSecret(env, def).Value()
+	e := s.put(key, env, KindSecret, "[REDACTED]", val, true)
+	s.m.MarkEncrypted(e.meta.Path)
+	return e
 }
 func (s *Section) Map(key string, values map[string]any) *Entry {
 	return s.put(key, "", KindMap, values, values, false)

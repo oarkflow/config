@@ -3,6 +3,7 @@ package config
 import (
 	"bytes"
 	"context"
+	"errors"
 	"fmt"
 	"sort"
 	"strings"
@@ -51,10 +52,12 @@ type Manager struct {
 	integrity       IntegrityPolicy
 	reloadHandlers  []AdvancedReloadHandler
 	migrations      []Migration
+	encryptor       Encryptor
+	encryptedPaths  map[string]bool
 }
 
 func New(opts ...Option) *Manager {
-	m := &Manager{parsers: map[string]Parser{}, reloadPolicy: DefaultReloadPolicy(), security: DefaultSecurityPolicy(), secretPaths: map[string]bool{}, sensitive: NewSensitiveMatcher(DefaultSensitivePolicy()), defaults: NewTree(), meta: map[string]EntryMeta{}, runtimePolicies: map[string]RuntimePolicy{}, providerStatus: map[string]ProviderStatus{}, historyLimit: 10}
+	m := &Manager{parsers: map[string]Parser{}, reloadPolicy: DefaultReloadPolicy(), security: DefaultSecurityPolicy(), secretPaths: map[string]bool{}, sensitive: NewSensitiveMatcher(DefaultSensitivePolicy()), defaults: NewTree(), meta: map[string]EntryMeta{}, runtimePolicies: map[string]RuntimePolicy{}, providerStatus: map[string]ProviderStatus{}, historyLimit: 10, encryptedPaths: map[string]bool{}}
 	m.cur.Store(newSnapshot(1, NewTree(), nil, nil))
 	for _, o := range opts {
 		o(m)
@@ -331,12 +334,30 @@ func (m *Manager) Watch(ctx context.Context) error {
 
 func (m *Manager) Get(path string, fallback ...any) any {
 	if v, ok := m.cur.Load().Tree.Get(path); ok {
-		return v
+		return m.maybeDecrypt(v)
 	}
 	if len(fallback) > 0 {
-		return fallback[0]
+		return m.maybeDecrypt(fallback[0])
 	}
 	return nil
+}
+func (m *Manager) maybeDecrypt(v any) any {
+	if m.encryptor == nil {
+		return v
+	}
+	s, ok := v.(string)
+	if !ok || !IsEncryptedValue(s) {
+		return v
+	}
+	algo, data, err := DecodeEncrypted(s)
+	if err != nil || algo != m.encryptor.Name() {
+		return v
+	}
+	plaintext, err := m.encryptor.Decrypt(data)
+	if err != nil {
+		return v
+	}
+	return string(plaintext)
 }
 func (m *Manager) String(path string, fallback ...string) string {
 	if s, ok := ToString(m.Get(path)); ok {
@@ -410,6 +431,33 @@ func (m *Manager) StringSlice(path string, fallback ...[]string) []string {
 	}
 	return nil
 }
+func (m *Manager) IntSlice(path string, fallback ...[]int) []int {
+	if s, ok := ToIntSlice(m.Get(path)); ok {
+		return s
+	}
+	if len(fallback) > 0 {
+		return fallback[0]
+	}
+	return nil
+}
+func (m *Manager) Int64Slice(path string, fallback ...[]int64) []int64 {
+	if s, ok := ToInt64Slice(m.Get(path)); ok {
+		return s
+	}
+	if len(fallback) > 0 {
+		return fallback[0]
+	}
+	return nil
+}
+func (m *Manager) Float64Slice(path string, fallback ...[]float64) []float64 {
+	if s, ok := ToFloat64Slice(m.Get(path)); ok {
+		return s
+	}
+	if len(fallback) > 0 {
+		return fallback[0]
+	}
+	return nil
+}
 func (m *Manager) Secret(path string) SecretString {
 	switch x := m.Get(path).(type) {
 	case SecretString:
@@ -458,6 +506,66 @@ func MustDecode[T any](m *Manager, prefix string) T {
 		panic(err)
 	}
 	return v
+}
+
+func (m *Manager) SetEncryptor(enc Encryptor) { m.encryptor = enc }
+
+func (m *Manager) MarkEncrypted(paths ...string) {
+	for _, p := range paths {
+		m.encryptedPaths[p] = true
+	}
+}
+func (m *Manager) UnmarkEncrypted(paths ...string) {
+	for _, p := range paths {
+		delete(m.encryptedPaths, p)
+	}
+}
+func (m *Manager) IsEncrypted(path string) bool { return m.encryptedPaths[path] }
+
+func (m *Manager) EncryptPath(path string) error {
+	if m.encryptor == nil {
+		return errors.New("config: no encryptor configured")
+	}
+	v, ok := m.cur.Load().Tree.Get(path)
+	if !ok {
+		return &ConfigError{Kind: ErrPath, Path: path, Message: "path not found"}
+	}
+	if IsEncryptedValue(v) {
+		return nil
+	}
+	plaintext := []byte(fmt.Sprint(v))
+	ciphertext, err := m.encryptor.Encrypt(plaintext)
+	if err != nil {
+		return err
+	}
+	encoded := EncodeEncrypted(ciphertext, m.encryptor.Name())
+	return m.Set(path, encoded)
+}
+
+func (m *Manager) DecryptPath(path string) error {
+	if m.encryptor == nil {
+		return errors.New("config: no encryptor configured")
+	}
+	raw, ok := m.cur.Load().Tree.Get(path)
+	if !ok {
+		return &ConfigError{Kind: ErrPath, Path: path, Message: "path not found"}
+	}
+	s, ok := raw.(string)
+	if !ok || !IsEncryptedValue(s) {
+		return fmt.Errorf("config: value at %s is not encrypted", path)
+	}
+	algo, data, err := DecodeEncrypted(s)
+	if err != nil {
+		return err
+	}
+	if algo != m.encryptor.Name() {
+		return fmt.Errorf("config: encrypted value at %s uses algorithm %q, but encryptor is %q", path, algo, m.encryptor.Name())
+	}
+	plaintext, err := m.encryptor.Decrypt(data)
+	if err != nil {
+		return err
+	}
+	return m.Set(path, string(plaintext))
 }
 
 func (m *Manager) Register(items ...any) error {

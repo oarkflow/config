@@ -6,7 +6,7 @@ import (
 	"log"
 
 	config "github.com/oarkflow/config"
-	"github.com/oarkflow/config/parsers/json"
+	jsonparser "github.com/oarkflow/config/parsers/json"
 	"github.com/oarkflow/config/providers/file"
 )
 

@@ -189,3 +189,511 @@ func TestRedactedJSONDoesNotHTMLEscapeRedactionText(t *testing.T) {
 		t.Fatalf("redacted json should not html-escape angle brackets: %s", out)
 	}
 }
+
+func TestAESGCMEncryptorRoundTrip(t *testing.T) {
+	key := []byte("0123456789abcdef") // 16 bytes
+	enc, err := config.NewAESGCMEncryptor(key)
+	if err != nil {
+		t.Fatal(err)
+	}
+	plaintext := []byte("hello-world")
+	ciphertext, err := enc.Encrypt(plaintext)
+	if err != nil {
+		t.Fatal(err)
+	}
+	decrypted, err := enc.Decrypt(ciphertext)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if string(decrypted) != string(plaintext) {
+		t.Fatalf("round-trip failed: got %q, want %q", decrypted, plaintext)
+	}
+	if string(ciphertext) == string(plaintext) {
+		t.Fatal("ciphertext matches plaintext – no encryption")
+	}
+}
+
+func TestAESGCMEncryptorFromPassphrase(t *testing.T) {
+	enc := config.NewAESGCMEncryptorFromPassphrase("my-secret-passphrase")
+	if enc.Name() != "aes256-gcm" {
+		t.Fatalf("bad name: %s", enc.Name())
+	}
+	ciphertext, err := enc.Encrypt([]byte("test"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	decrypted, err := enc.Decrypt(ciphertext)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if string(decrypted) != "test" {
+		t.Fatalf("bad decryption: %s", decrypted)
+	}
+}
+
+func TestEncodedFormat(t *testing.T) {
+	data := []byte{1, 2, 3, 4}
+	encoded := config.EncodeEncrypted(data, "aes256-gcm")
+	if !config.IsEncryptedValue(encoded) {
+		t.Fatal("should detect encrypted value")
+	}
+	algo, decoded, err := config.DecodeEncrypted(encoded)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if algo != "aes256-gcm" {
+		t.Fatalf("bad algo: %s", algo)
+	}
+	if string(decoded) != string(data) {
+		t.Fatalf("bad decode: %x vs %x", decoded, data)
+	}
+	if config.IsEncryptedValue("plain string") {
+		t.Fatal("should not detect plain string as encrypted")
+	}
+	if config.IsEncryptedValue(42) {
+		t.Fatal("should not detect non-string as encrypted")
+	}
+}
+
+func TestEncryptAndDecryptPath(t *testing.T) {
+	enc := config.NewAESGCMEncryptorFromPassphrase("test-key")
+	cfg := config.New(config.WithEncryptor(enc))
+	if err := cfg.Set("db.password", "s3cret!"); err != nil {
+		t.Fatal(err)
+	}
+	if cfg.IsEncrypted("db.password") {
+		t.Fatal("should not be encrypted yet")
+	}
+	cfg.MarkEncrypted("db.password")
+	if !cfg.IsEncrypted("db.password") {
+		t.Fatal("should be marked encrypted")
+	}
+	if err := cfg.EncryptPath("db.password"); err != nil {
+		t.Fatal(err)
+	}
+	if cfg.Get("db.password") != "s3cret!" {
+		t.Fatalf("Get should auto-decrypt: got %q", cfg.Get("db.password"))
+	}
+	if err := cfg.DecryptPath("db.password"); err != nil {
+		t.Fatal(err)
+	}
+	if cfg.Get("db.password") != "s3cret!" {
+		t.Fatalf("after decrypt path: got %q", cfg.Get("db.password"))
+	}
+}
+
+func TestEncryptedValueTypedGetters(t *testing.T) {
+	enc := config.NewAESGCMEncryptorFromPassphrase("test-key")
+	cfg := config.New(config.WithEncryptor(enc))
+	if err := cfg.Set("db.port", "5432"); err != nil {
+		t.Fatal(err)
+	}
+	if err := cfg.Set("db.host", "localhost"); err != nil {
+		t.Fatal(err)
+	}
+	cfg.MarkEncrypted("db.port", "db.host")
+	if err := cfg.EncryptPath("db.port"); err != nil {
+		t.Fatal(err)
+	}
+	if err := cfg.EncryptPath("db.host"); err != nil {
+		t.Fatal(err)
+	}
+	if cfg.String("db.port") != "5432" {
+		t.Fatalf("String getter: got %q", cfg.String("db.port"))
+	}
+	if cfg.Int("db.port") != 5432 {
+		t.Fatalf("Int getter: got %d", cfg.Int("db.port"))
+	}
+	if cfg.String("db.host") != "localhost" {
+		t.Fatalf("String getter for host: got %q", cfg.String("db.host"))
+	}
+}
+
+func TestEncryptedValueWithFallback(t *testing.T) {
+	enc := config.NewAESGCMEncryptorFromPassphrase("test-key")
+	cfg := config.New(config.WithEncryptor(enc))
+	if v := cfg.String("nonexistent", "fallback"); v != "fallback" {
+		t.Fatalf("fallback returned %q", v)
+	}
+}
+
+func TestEncryptPathRequiresEncryptor(t *testing.T) {
+	cfg := config.New()
+	if err := cfg.EncryptPath("x.y"); err == nil {
+		t.Fatal("expected error without encryptor")
+	}
+}
+
+func TestEncryptPathNotFound(t *testing.T) {
+	cfg := config.New(config.WithEncryptor(config.NewAESGCMEncryptorFromPassphrase("key")))
+	if err := cfg.EncryptPath("no.such.path"); err == nil {
+		t.Fatal("expected error for missing path")
+	}
+}
+
+func TestDecryptPathNotEncrypted(t *testing.T) {
+	cfg := config.New(config.WithEncryptor(config.NewAESGCMEncryptorFromPassphrase("key")))
+	if err := cfg.Set("x.y", "plain"); err != nil {
+		t.Fatal(err)
+	}
+	if err := cfg.DecryptPath("x.y"); err == nil {
+		t.Fatal("expected error for non-encrypted path")
+	}
+}
+
+func TestUnmarkEncrypted(t *testing.T) {
+	cfg := config.New()
+	cfg.MarkEncrypted("a.b", "c.d")
+	if !cfg.IsEncrypted("a.b") {
+		t.Fatal("should be encrypted")
+	}
+	if !cfg.IsEncrypted("c.d") {
+		t.Fatal("should be encrypted")
+	}
+	cfg.UnmarkEncrypted("a.b")
+	if cfg.IsEncrypted("a.b") {
+		t.Fatal("should no longer be encrypted")
+	}
+	if !cfg.IsEncrypted("c.d") {
+		t.Fatal("c.d should still be encrypted")
+	}
+}
+
+type encryptedModule struct{}
+
+func (encryptedModule) Prefix() string { return "db" }
+func (encryptedModule) Configure(s *config.Section) {
+	s.EncryptedString("password", "DB_PASSWORD", "default-pass")
+}
+
+func TestEncryptedViaSectionBuilder(t *testing.T) {
+	enc := config.NewAESGCMEncryptorFromPassphrase("test-key")
+	cfg := config.New(config.WithEncryptor(enc))
+	if err := cfg.Register(encryptedModule{}); err != nil {
+		t.Fatal(err)
+	}
+	if !cfg.IsEncrypted("db.password") {
+		t.Fatal("should be marked encrypted by section builder")
+	}
+	if err := cfg.EncryptPath("db.password"); err != nil {
+		t.Fatal(err)
+	}
+	if cfg.String("db.password") != "default-pass" {
+		t.Fatalf("got %q", cfg.String("db.password"))
+	}
+}
+
+func TestWithEncryptedPathsOption(t *testing.T) {
+	enc := config.NewAESGCMEncryptorFromPassphrase("key")
+	cfg := config.New(config.WithEncryptor(enc), config.WithEncryptedPaths("app.api_key"))
+	if !cfg.IsEncrypted("app.api_key") {
+		t.Fatal("WithEncryptedPaths should mark path")
+	}
+}
+
+func TestGetReturnsEncryptedValueWhenNoEncryptor(t *testing.T) {
+	cfg := config.New()
+	enc := config.NewAESGCMEncryptorFromPassphrase("external")
+	ciphertext, _ := enc.Encrypt([]byte("mysecret"))
+	encoded := config.EncodeEncrypted(ciphertext, enc.Name())
+	if err := cfg.Set("x.y", encoded); err != nil {
+		t.Fatal(err)
+	}
+	if cfg.Get("x.y") != encoded {
+		t.Fatalf("should return raw encrypted value without encryptor: got %v", cfg.Get("x.y"))
+	}
+}
+
+func TestEncryptPathAlreadyEncryptedIsNoop(t *testing.T) {
+	enc := config.NewAESGCMEncryptorFromPassphrase("key")
+	cfg := config.New(config.WithEncryptor(enc))
+	if err := cfg.Set("x.y", "value"); err != nil {
+		t.Fatal(err)
+	}
+	if err := cfg.EncryptPath("x.y"); err != nil {
+		t.Fatal(err)
+	}
+	encrypted, _ := cfg.Snapshot().Tree.Get("x.y")
+	if err := cfg.EncryptPath("x.y"); err != nil {
+		t.Fatal(err)
+	}
+	after, _ := cfg.Snapshot().Tree.Get("x.y")
+	if encrypted != after {
+		t.Fatal("re-encrypt should be noop")
+	}
+}
+
+func TestIntSliceGetter(t *testing.T) {
+	cfg := config.New()
+	if err := cfg.Set("nums", []int{1, 2, 3}); err != nil {
+		t.Fatal(err)
+	}
+	got := cfg.IntSlice("nums")
+	if len(got) != 3 || got[0] != 1 || got[1] != 2 || got[2] != 3 {
+		t.Fatalf("got %v", got)
+	}
+}
+
+func TestIntSliceFromAnySlice(t *testing.T) {
+	cfg := config.New()
+	if err := cfg.Set("nums", []any{10, 20, 30}); err != nil {
+		t.Fatal(err)
+	}
+	got := cfg.IntSlice("nums")
+	if len(got) != 3 || got[0] != 10 || got[1] != 20 || got[2] != 30 {
+		t.Fatalf("got %v", got)
+	}
+}
+
+func TestIntSliceFallback(t *testing.T) {
+	cfg := config.New()
+	got := cfg.IntSlice("nonexistent", []int{99, 100})
+	if len(got) != 2 || got[0] != 99 || got[1] != 100 {
+		t.Fatalf("got %v", got)
+	}
+}
+
+func TestInt64SliceGetter(t *testing.T) {
+	cfg := config.New()
+	if err := cfg.Set("nums", []int64{1e12, 2e12}); err != nil {
+		t.Fatal(err)
+	}
+	got := cfg.Int64Slice("nums")
+	if len(got) != 2 || got[0] != 1e12 || got[1] != 2e12 {
+		t.Fatalf("got %v", got)
+	}
+}
+
+func TestFloat64SliceGetter(t *testing.T) {
+	cfg := config.New()
+	if err := cfg.Set("vals", []float64{1.5, 2.5, 3.5}); err != nil {
+		t.Fatal(err)
+	}
+	got := cfg.Float64Slice("vals")
+	if len(got) != 3 || got[0] != 1.5 || got[1] != 2.5 || got[2] != 3.5 {
+		t.Fatalf("got %v", got)
+	}
+}
+
+func TestFloat64SliceFromAnySlice(t *testing.T) {
+	cfg := config.New()
+	if err := cfg.Set("vals", []any{1.5, 2, 3.5}); err != nil {
+		t.Fatal(err)
+	}
+	got := cfg.Float64Slice("vals")
+	if len(got) != 3 || got[0] != 1.5 || got[1] != 2.0 || got[2] != 3.5 {
+		t.Fatalf("got %v", got)
+	}
+}
+
+func TestIntSliceFromStringSliceViaParse(t *testing.T) {
+	cfg := config.New()
+	if err := cfg.Set("nums", []string{"5", "10", "15"}); err != nil {
+		t.Fatal(err)
+	}
+	got := cfg.IntSlice("nums")
+	if len(got) != 3 || got[0] != 5 || got[1] != 10 || got[2] != 15 {
+		t.Fatalf("got %v", got)
+	}
+}
+
+func TestConversionToIntSlice(t *testing.T) {
+	if _, ok := config.ToIntSlice("not-a-slice"); ok {
+		t.Fatal("string should not convert to int slice")
+	}
+	v, ok := config.ToIntSlice([]any{1, 2, 3})
+	if !ok || len(v) != 3 || v[0] != 1 {
+		t.Fatal("failed to convert []any{1,2,3}")
+	}
+}
+
+func TestConversionToInt64Slice(t *testing.T) {
+	v, ok := config.ToInt64Slice([]any{1, 2, 3})
+	if !ok || len(v) != 3 || v[0] != 1 {
+		t.Fatal("failed to convert []any{1,2,3} to int64")
+	}
+}
+
+func TestConversionToFloat64Slice(t *testing.T) {
+	v, ok := config.ToFloat64Slice([]any{1.5, 2.5})
+	if !ok || len(v) != 2 || v[0] != 1.5 {
+		t.Fatal("failed to convert []any{1.5,2.5}")
+	}
+}
+
+func TestIntSliceNonexistentReturnsNil(t *testing.T) {
+	cfg := config.New()
+	got := cfg.IntSlice("no.such.path")
+	if got != nil {
+		t.Fatal("expected nil")
+	}
+}
+
+func TestFloat64SliceNonexistentReturnsNil(t *testing.T) {
+	cfg := config.New()
+	got := cfg.Float64Slice("no.such.path")
+	if got != nil {
+		t.Fatal("expected nil")
+	}
+}
+
+func TestAESGCMInvalidKeySize(t *testing.T) {
+	_, err := config.NewAESGCMEncryptor([]byte("short"))
+	if err == nil {
+		t.Fatal("expected error for short key")
+	}
+}
+
+func TestSchemaValidatorValid(t *testing.T) {
+	schema := map[string]any{
+		"type": "object",
+		"properties": map[string]any{
+			"app": map[string]any{
+				"type": "object",
+				"properties": map[string]any{
+					"name":  map[string]any{"type": "string"},
+					"debug": map[string]any{"type": "boolean"},
+				},
+				"required": []any{"name"},
+			},
+		},
+	}
+	cfg := config.New(config.WithSchema(schema))
+	if err := cfg.Set("app.name", "test"); err != nil {
+		t.Fatal(err)
+	}
+	if err := cfg.Set("app.debug", true); err != nil {
+		t.Fatal(err)
+	}
+	if err := cfg.Load(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+}
+
+func TestSchemaValidatorInvalid(t *testing.T) {
+	schema := map[string]any{
+		"type": "object",
+		"properties": map[string]any{
+			"app": map[string]any{
+				"type": "object",
+				"properties": map[string]any{
+					"port": map[string]any{"type": "integer", "minimum": 1024},
+				},
+			},
+		},
+	}
+	cfg := config.New(config.WithSchema(schema))
+	err := cfg.Set("app.port", 80)
+	if err == nil {
+		t.Fatal("expected validation error for port < 1024")
+	}
+}
+
+func TestSchemaValidatorTypeMismatch(t *testing.T) {
+	schema := map[string]any{
+		"type": "object",
+		"properties": map[string]any{
+			"app": map[string]any{
+				"type": "object",
+				"properties": map[string]any{
+					"debug": map[string]any{"type": "boolean"},
+				},
+			},
+		},
+	}
+	cfg := config.New(config.WithSchema(schema))
+	err := cfg.Set("app.debug", "not-a-bool")
+	if err == nil {
+		t.Fatal("expected validation error for type mismatch")
+	}
+}
+
+func TestSchemaValidatorRequiredMissing(t *testing.T) {
+	schema := map[string]any{
+		"type": "object",
+		"properties": map[string]any{
+			"database": map[string]any{
+				"type": "object",
+				"properties": map[string]any{
+					"host":     map[string]any{"type": "string"},
+					"password": map[string]any{"type": "string"},
+				},
+				"required": []any{"host", "password"},
+			},
+		},
+	}
+	cfg := config.New(config.WithSchema(schema))
+	err := cfg.Set("database.host", "localhost")
+	if err == nil {
+		t.Fatal("expected validation error for missing password")
+	}
+}
+
+func TestMustSchemaValidatorPanics(t *testing.T) {
+	defer func() {
+		if r := recover(); r == nil {
+			t.Fatal("expected panic")
+		}
+	}()
+	config.MustSchemaValidator("not-a-valid-schema")
+}
+
+func TestNewSchemaValidatorInvalidSchema(t *testing.T) {
+	_, err := config.NewSchemaValidator("not-a-valid-schema")
+	if err == nil {
+		t.Fatal("expected error for invalid schema")
+	}
+}
+
+func TestSchemaValidatorAcceptsNestedPathErrors(t *testing.T) {
+	schema := map[string]any{
+		"type": "object",
+		"properties": map[string]any{
+			"server": map[string]any{
+				"type": "object",
+				"properties": map[string]any{
+					"port": map[string]any{"type": "integer", "minimum": 1, "maximum": 65535},
+				},
+			},
+		},
+	}
+	cfg := config.New(config.WithSchema(schema))
+	err := cfg.Set("server.port", 70000)
+	if err == nil {
+		t.Fatal("expected validation error for port > 65535")
+	}
+}
+
+func TestSchemaValidatorValidComplexObject(t *testing.T) {
+	schema := map[string]any{
+		"type": "object",
+		"properties": map[string]any{
+			"app": map[string]any{
+				"type": "object",
+				"properties": map[string]any{
+					"name":    map[string]any{"type": "string"},
+					"version": map[string]any{"type": "string"},
+				},
+				"required": []any{"name", "version"},
+			},
+			"server": map[string]any{
+				"type": "object",
+				"properties": map[string]any{
+					"host": map[string]any{"type": "string"},
+					"port": map[string]any{"type": "integer", "minimum": 1, "maximum": 65535},
+				},
+				"required": []any{"host", "port"},
+			},
+		},
+	}
+	cfg := config.New(
+		config.WithSchema(schema),
+		config.WithProviders(memory.New("test", map[string]any{
+			"app":    map[string]any{"name": "myapp", "version": "1.0.0"},
+			"server": map[string]any{"host": "0.0.0.0", "port": 8080},
+		})),
+	)
+	if err := cfg.Load(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+}
